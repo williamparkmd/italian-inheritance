@@ -25,7 +25,7 @@ from scan import (
 
 # --- Config ---
 st.set_page_config(
-    page_title="Italian Inheritance",
+    page_title="Inheritance",
     page_icon="🏛️",
     layout="wide",
 )
@@ -116,7 +116,7 @@ def build_context(data):
 # --- Sidebar ---
 with st.sidebar:
     st.image("assets/crest.png", use_container_width=True)
-    st.title("Italian Inheritance")
+    st.title("Inheritance")
     st.caption("Divisione Eredità")
 
     if st.session_state.data:
