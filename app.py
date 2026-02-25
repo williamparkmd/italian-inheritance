@@ -517,33 +517,6 @@ with st.sidebar:
 # --- Custom CSS for layout ---
 st.markdown("""
 <style>
-/* Lock the main page so it never scrolls — columns scroll instead */
-[data-testid="stMain"] {
-    overflow: hidden !important;
-    height: 100vh !important;
-}
-[data-testid="stMainBlockContainer"] {
-    height: 100% !important;
-    max-height: 100vh !important;
-    padding-bottom: 0 !important;
-    overflow: hidden !important;
-}
-[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] {
-    height: 100% !important;
-    overflow: hidden !important;
-}
-/* The row of columns fills available height */
-[data-testid="stHorizontalBlock"] {
-    height: calc(100vh - 1rem) !important;
-    overflow: hidden !important;
-    align-items: stretch !important;
-}
-/* Each column scrolls independently */
-[data-testid="column"] {
-    overflow-y: auto !important;
-    height: 100% !important;
-}
-
 /* Blue highlighted expandable report items */
 div[data-testid="stExpander"] details {
     border: 1px solid #1976D2;
@@ -570,6 +543,15 @@ div[data-testid="stExpander"] details[open] summary {
 .interview-btn button:hover {
     background-color: #1B5E20 !important;
     color: white !important;
+}
+
+/* Make the chat (second) column sticky so it stays in viewport */
+[data-testid="stHorizontalBlock"] > [data-testid="column"]:last-child {
+    position: sticky;
+    top: 3.5rem;
+    align-self: flex-start;
+    max-height: calc(100vh - 4rem);
+    overflow-y: auto;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -700,7 +682,7 @@ with col_report:
                         f"Updated: {datetime.fromisoformat(section['updated_at']).strftime('%Y-%m-%d %H:%M')}"
                     )
 
-# --- Chat Column (scrolls independently via CSS) ---
+# --- Chat Column (sticky — stays in place while report scrolls) ---
 with col_chat:
     st.header("Chat")
 
@@ -737,10 +719,12 @@ with col_chat:
                 st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
-            # Chat history (column itself scrolls)
-            for msg in st.session_state.messages:
-                with st.chat_message(msg["role"]):
-                    st.markdown(msg["content"])
+            # Scrollable chat history
+            chat_container = st.container(height=500)
+            with chat_container:
+                for msg in st.session_state.messages:
+                    with st.chat_message(msg["role"]):
+                        st.markdown(msg["content"])
 
             # Chat input
             if prompt := st.chat_input("Ask about the inheritance..."):
