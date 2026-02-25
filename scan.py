@@ -100,7 +100,11 @@ HANDLERS = {
 
 def get_dropbox_client():
     """Create Dropbox client from token."""
-    token = os.environ.get("DROPBOX_TOKEN", "")
+    try:
+        import streamlit as st
+        token = st.secrets.get("DROPBOX_TOKEN", "") or os.environ.get("DROPBOX_TOKEN", "")
+    except Exception:
+        token = os.environ.get("DROPBOX_TOKEN", "")
     if not token:
         return None
     return dropbox.Dropbox(token)

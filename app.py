@@ -213,7 +213,10 @@ with tab_chat:
     if st.session_state.data is None:
         st.info("Click **Load Documents** first, then ask questions here.")
     else:
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        try:
+            api_key = st.secrets.get("ANTHROPIC_API_KEY", "") or os.environ.get("ANTHROPIC_API_KEY", "")
+        except Exception:
+            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         if not api_key:
             st.error("AI chat not configured.")
         else:
