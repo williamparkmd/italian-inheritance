@@ -115,6 +115,7 @@ def build_context(data):
 
 # --- Sidebar ---
 with st.sidebar:
+    st.image("assets/crest.png", use_container_width=True)
     st.title("Italian Inheritance")
     st.caption("Divisione Eredità")
 
