@@ -6,7 +6,7 @@ and lets family members ask questions via AI.
 """
 
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import anthropic
@@ -17,6 +17,7 @@ load_dotenv(".env.local")
 
 from scan import (
     get_dropbox_client,
+    get_dropbox_fingerprint,
     scan_dropbox,
     upload_to_dropbox,
     parse_heirs,
@@ -36,21 +37,45 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "data" not in st.session_state:
     st.session_state.data = None
+if "dropbox_fingerprint" not in st.session_state:
+    st.session_state.dropbox_fingerprint = None
 
 
 def load_documents():
     """Scan Dropbox via API and parse data."""
     dbx = get_dropbox_client()
     if not dbx:
-        st.error("Dropbox not configured.")
         return None
     documents = scan_dropbox(dbx)
+    # Update fingerprint so the poller doesn't immediately reload
+    st.session_state.dropbox_fingerprint = get_dropbox_fingerprint(dbx)
     return {
         "scan_date": datetime.now().isoformat(),
         "documents": documents,
         "heirs": parse_heirs(documents),
         "assets": parse_assets(documents),
     }
+
+
+# --- Auto-load on first open ---
+if st.session_state.data is None:
+    with st.spinner("Loading documents from Dropbox..."):
+        st.session_state.data = load_documents()
+
+
+# --- Poll Dropbox for changes every 30 seconds ---
+@st.fragment(run_every=timedelta(seconds=30))
+def _poll_dropbox():
+    dbx = get_dropbox_client()
+    if not dbx:
+        return
+    fingerprint = get_dropbox_fingerprint(dbx)
+    if fingerprint and fingerprint != st.session_state.dropbox_fingerprint:
+        st.session_state.data = load_documents()
+        st.rerun(scope="app")
+
+
+_poll_dropbox()
 
 
 def build_context(data):
@@ -95,12 +120,12 @@ with st.sidebar:
     st.title("Italian Inheritance")
     st.caption("Divisione Eredità")
 
-    # Scan documents from Dropbox
-    if st.button("🔄 Load Documents", use_container_width=True):
-        with st.spinner("Reading from Dropbox..."):
-            st.session_state.data = load_documents()
-        if st.session_state.data:
-            st.success(f"Found {len(st.session_state.data['documents'])} document(s)")
+    if st.session_state.data:
+        n_docs = len(st.session_state.data["documents"])
+        scan_time = datetime.fromisoformat(st.session_state.data["scan_date"]).strftime("%H:%M")
+        st.caption(f"✓ {n_docs} document(s) · last sync {scan_time}")
+    else:
+        st.warning("Dropbox not configured or no documents found.")
 
     # Upload new documents to Dropbox
     st.divider()
@@ -145,7 +170,7 @@ tab_report, tab_chat = st.tabs(["📊 Report", "💬 Chat"])
 # --- Report Tab ---
 with tab_report:
     if st.session_state.data is None:
-        st.info("Click **Load Documents** in the sidebar to read documents from Dropbox.")
+        st.info("Connecting to Dropbox... If this persists, check your Dropbox configuration.")
     else:
         data = st.session_state.data
         st.header("Inheritance Report")
@@ -211,7 +236,7 @@ with tab_report:
 # --- Chat Tab ---
 with tab_chat:
     if st.session_state.data is None:
-        st.info("Click **Load Documents** first, then ask questions here.")
+        st.info("Waiting for documents to load from Dropbox...")
     else:
         try:
             api_key = st.secrets.get("ANTHROPIC_API_KEY", "") or os.environ.get("ANTHROPIC_API_KEY", "")

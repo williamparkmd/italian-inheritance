@@ -187,6 +187,26 @@ def upload_to_dropbox(dbx, file_bytes, filename, folder_path=""):
     dbx.files_upload(file_bytes, path, mode=dropbox.files.WriteMode.overwrite)
 
 
+def get_dropbox_fingerprint(dbx, folder_path=""):
+    """Return a string fingerprint of the Dropbox folder state.
+
+    Built from sorted file paths, sizes, and content hashes so any
+    add/remove/modify of a file produces a different fingerprint.
+    """
+    try:
+        result = dbx.files_list_folder(folder_path, recursive=True)
+        entries = list(result.entries)
+        while result.has_more:
+            result = dbx.files_list_folder_continue(result.cursor)
+            entries.extend(result.entries)
+
+        files = [e for e in entries if isinstance(e, dropbox.files.FileMetadata)]
+        parts = sorted(f"{f.path_lower}:{f.size}:{f.content_hash}" for f in files)
+        return "|".join(parts)
+    except Exception:
+        return None
+
+
 def parse_heirs(documents):
     """Parse heir information from document text."""
     heirs = []
