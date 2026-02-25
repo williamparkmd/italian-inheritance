@@ -33,18 +33,17 @@ st.set_page_config(
 )
 
 # --- State Init ---
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "data" not in st.session_state:
-    st.session_state.data = None
-if "dropbox_fingerprint" not in st.session_state:
-    st.session_state.dropbox_fingerprint = None
-if "reports" not in st.session_state:
-    st.session_state.reports = []
-if "notes" not in st.session_state:
-    st.session_state.notes = []
-if "initialized" not in st.session_state:
-    st.session_state.initialized = False
+for key, default in [
+    ("messages", []),
+    ("data", None),
+    ("dropbox_fingerprint", None),
+    ("reports", []),
+    ("notes", []),
+    ("interview", []),
+    ("initialized", False),
+]:
+    if key not in st.session_state:
+        st.session_state[key] = default
 
 
 def load_documents():
@@ -63,40 +62,41 @@ def load_documents():
 
 
 def load_persistent_data():
-    """Load chat history and reports from Dropbox."""
+    """Load chat history, reports, notes, and interview from Dropbox."""
     dbx = get_dropbox_client()
     if not dbx:
         return
-    chat_data = load_app_data(dbx, "chat_history.json")
-    if chat_data:
-        st.session_state.messages = chat_data
-    report_data = load_app_data(dbx, "reports.json")
-    if report_data:
-        st.session_state.reports = report_data
-    notes_data = load_app_data(dbx, "notes.json")
-    if notes_data:
-        st.session_state.notes = notes_data
+    for key, filename in [
+        ("messages", "chat_history.json"),
+        ("reports", "reports.json"),
+        ("notes", "notes.json"),
+        ("interview", "interview.json"),
+    ]:
+        data = load_app_data(dbx, filename)
+        if data:
+            st.session_state[key] = data
+
+
+def _save(filename, key):
+    dbx = get_dropbox_client()
+    if dbx:
+        save_app_data(dbx, filename, st.session_state[key])
 
 
 def save_chat_history():
-    """Save chat history to Dropbox."""
-    dbx = get_dropbox_client()
-    if dbx:
-        save_app_data(dbx, "chat_history.json", st.session_state.messages)
+    _save("chat_history.json", "messages")
 
 
 def save_reports():
-    """Save reports to Dropbox."""
-    dbx = get_dropbox_client()
-    if dbx:
-        save_app_data(dbx, "reports.json", st.session_state.reports)
+    _save("reports.json", "reports")
 
 
 def save_notes():
-    """Save notes/corrections to Dropbox."""
-    dbx = get_dropbox_client()
-    if dbx:
-        save_app_data(dbx, "notes.json", st.session_state.notes)
+    _save("notes.json", "notes")
+
+
+def save_interview():
+    _save("interview.json", "interview")
 
 
 # --- Auto-load on first open ---
@@ -129,7 +129,7 @@ AI_TOOLS = [
         "description": (
             "Create or update a section of the inheritance report. "
             "Use this when the user asks to create, modify, add to, or correct "
-            "any part of the report. Each section has a unique ID — reuse the "
+            "any part of the report. Each section has a unique ID \u2014 reuse the "
             "same ID to update an existing section."
         ),
         "input_schema": {
@@ -137,7 +137,7 @@ AI_TOOLS = [
             "properties": {
                 "section_id": {
                     "type": "string",
-                    "description": "Unique identifier (e.g. 'division_proposal', 'property_summary'). Lowercase with underscores.",
+                    "description": "Unique identifier (e.g. 'division_proposal'). Lowercase with underscores.",
                 },
                 "title": {
                     "type": "string",
@@ -169,9 +169,8 @@ AI_TOOLS = [
         "name": "add_note",
         "description": (
             "Save a correction or important fact provided by the user. "
-            "Use this whenever the user corrects information (e.g. 'Giovanni actually has 2 children') "
-            "or provides new facts not in the documents. Notes persist across sessions and are always "
-            "considered when answering questions or generating reports."
+            "Use this whenever the user corrects information or provides new facts "
+            "not in the documents. Notes persist and override document data."
         ),
         "input_schema": {
             "type": "object",
@@ -186,23 +185,66 @@ AI_TOOLS = [
     },
     {
         "name": "remove_note",
-        "description": "Remove a previously saved note that is no longer accurate or relevant.",
+        "description": "Remove a previously saved note that is no longer accurate.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "note_index": {
                     "type": "integer",
-                    "description": "The 0-based index of the note to remove (from the CORRECTIONS & NOTES list).",
+                    "description": "0-based index of the note to remove.",
                 },
             },
             "required": ["note_index"],
+        },
+    },
+    {
+        "name": "save_interview_entry",
+        "description": (
+            "Save a question-answer pair from the interview. Use this during interviews "
+            "to record the user's answer. Each entry has a topic for grouping."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "topic": {
+                    "type": "string",
+                    "description": "Category: 'deceased', 'family', 'properties', 'finances', 'legal', 'agreements', or 'other'.",
+                },
+                "question": {
+                    "type": "string",
+                    "description": "The interview question that was asked.",
+                },
+                "answer": {
+                    "type": "string",
+                    "description": "Summary of the user's answer. Be factual and concise.",
+                },
+            },
+            "required": ["topic", "question", "answer"],
+        },
+    },
+    {
+        "name": "update_interview_entry",
+        "description": "Update the answer of an existing interview entry when the user provides a correction.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entry_index": {
+                    "type": "integer",
+                    "description": "0-based index of the interview entry to update.",
+                },
+                "answer": {
+                    "type": "string",
+                    "description": "The corrected answer.",
+                },
+            },
+            "required": ["entry_index", "answer"],
         },
     },
 ]
 
 
 def handle_tool_call(name, params):
-    """Execute a report tool call and return a result string."""
+    """Execute a tool call and return a result string."""
     if name == "update_report":
         section_id = params["section_id"]
         title = params["title"]
@@ -236,13 +278,12 @@ def handle_tool_call(name, params):
         return f"Section '{section_id}' not found"
 
     if name == "add_note":
-        note_text = params["note"]
         st.session_state.notes.append({
-            "note": note_text,
+            "note": params["note"],
             "added_at": datetime.now().isoformat(),
         })
         save_notes()
-        return f"Saved note: '{note_text}'"
+        return f"Saved note: '{params['note']}'"
 
     if name == "remove_note":
         idx = params["note_index"]
@@ -252,7 +293,108 @@ def handle_tool_call(name, params):
             return f"Removed note: '{removed['note']}'"
         return f"Invalid note index {idx}"
 
+    if name == "save_interview_entry":
+        st.session_state.interview.append({
+            "topic": params["topic"],
+            "question": params["question"],
+            "answer": params["answer"],
+            "answered_at": datetime.now().isoformat(),
+        })
+        save_interview()
+        return f"Saved interview entry under '{params['topic']}'"
+
+    if name == "update_interview_entry":
+        idx = params["entry_index"]
+        if 0 <= idx < len(st.session_state.interview):
+            st.session_state.interview[idx]["answer"] = params["answer"]
+            st.session_state.interview[idx]["answered_at"] = datetime.now().isoformat()
+            save_interview()
+            return f"Updated interview entry {idx}"
+        return f"Invalid entry index {idx}"
+
     return "Unknown tool"
+
+
+def send_to_ai(user_message):
+    """Send a message to the AI, handle tool use loop, save results."""
+    try:
+        api_key = st.secrets.get("ANTHROPIC_API_KEY", "") or os.environ.get("ANTHROPIC_API_KEY", "")
+    except Exception:
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return None
+
+    st.session_state.messages.append({"role": "user", "content": user_message})
+
+    context = build_context(st.session_state.data)
+    api_messages = [
+        {"role": m["role"], "content": m["content"]}
+        for m in st.session_state.messages
+    ]
+
+    client = anthropic.Anthropic(api_key=api_key)
+
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=4096,
+        system=context,
+        messages=api_messages,
+        tools=AI_TOOLS,
+    )
+
+    # Tool use loop
+    while response.stop_reason == "tool_use":
+        assistant_content = []
+        tool_results = []
+        for block in response.content:
+            if block.type == "text":
+                assistant_content.append({"type": "text", "text": block.text})
+            elif block.type == "tool_use":
+                assistant_content.append({
+                    "type": "tool_use",
+                    "id": block.id,
+                    "name": block.name,
+                    "input": block.input,
+                })
+                result = handle_tool_call(block.name, block.input)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result,
+                })
+
+        api_messages.append({"role": "assistant", "content": assistant_content})
+        api_messages.append({"role": "user", "content": tool_results})
+
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=4096,
+            system=context,
+            messages=api_messages,
+            tools=AI_TOOLS,
+        )
+
+    # Extract final text reply
+    reply = ""
+    for block in response.content:
+        if block.type == "text":
+            reply += block.text
+    reply = reply or "Done \u2014 check the Report panel."
+
+    st.session_state.messages.append({"role": "assistant", "content": reply})
+    save_chat_history()
+    return reply
+
+
+TOPIC_LABELS = {
+    "deceased": "Deceased",
+    "family": "Family",
+    "properties": "Properties",
+    "finances": "Finances",
+    "legal": "Legal",
+    "agreements": "Agreements",
+    "other": "Other",
+}
 
 
 def build_context(data):
@@ -263,24 +405,58 @@ def build_context(data):
         "Answer in the same language the user writes in (Italian or English).",
         "When discussing legal matters, note that this is informational only, not legal advice.",
         "",
-        "You have tools to create and modify report sections that appear on the Report panel",
-        "next to this chat. When the user asks you to create a report, summary, proposal,",
-        "or any structured output, use the update_report tool to display it on the Report panel.",
-        "You can create multiple sections. To update an existing section, use update_report",
-        "with the same section_id. To remove a section, use delete_report_section.",
+        "== YOUR TOOLS ==",
         "",
-        "IMPORTANT: When the user corrects any information or provides a new fact",
-        "(e.g. 'Giovanni actually has 2 children', 'the apartment is worth 200k'),",
-        "ALWAYS use the add_note tool to save it. Notes override document data and persist",
-        "across sessions. Always consider saved notes when answering questions or generating reports.",
-        "If a note contradicts document data, the note takes priority.",
+        "REPORTS: You can create/update/delete report sections on the Report panel using",
+        "update_report and delete_report_section. Use these when asked to create reports,",
+        "summaries, proposals, or any structured output.",
+        "",
+        "NOTES: When the user corrects information or provides new facts, ALWAYS use add_note",
+        "to save it. Notes override document data and persist across sessions.",
+        "",
+        "INTERVIEW: When conducting an interview, save each answer using save_interview_entry.",
+        "If the user corrects a previous interview answer, use update_interview_entry.",
+        "Interview data is the DEFINITIVE source of truth \u2014 it takes highest priority",
+        "over documents and notes when generating reports or answering questions.",
+        "",
+        "When conducting an interview, ask ONE question at a time. Cover these topics:",
+        "- Deceased: name, date of death, place of residence, marital status at death",
+        "- Family: complete family tree, spouse(s), all children and their families",
+        "- Properties: all real estate, locations, estimated values, ownership details",
+        "- Finances: bank accounts, investments, pensions, debts, mortgages",
+        "- Legal: existing wills, donations, prior agreements, power of attorney",
+        "- Agreements: any informal agreements between heirs, preferences, disputes",
+        "Review what has already been answered before asking the next question.",
+        "Ask follow-up questions when answers are incomplete or raise new topics.",
         "",
     ]
 
+    # Interview data (highest priority)
+    if st.session_state.interview:
+        parts.append("== INTERVIEW DATA (definitive source of truth) ==")
+        topics = {}
+        for i, entry in enumerate(st.session_state.interview):
+            topics.setdefault(entry["topic"], []).append((i, entry))
+        for topic, entries in topics.items():
+            label = TOPIC_LABELS.get(topic, topic.title())
+            parts.append(f"\n--- {label} ---")
+            for i, entry in entries:
+                parts.append(f"  [{i}] Q: {entry['question']}")
+                parts.append(f"      A: {entry['answer']}")
+        parts.append("")
+
+    # Notes (override documents)
+    if st.session_state.notes:
+        parts.append("== CORRECTIONS & NOTES (override document data) ==")
+        for i, n in enumerate(st.session_state.notes):
+            parts.append(f"  {i}. {n['note']} (added {n['added_at'][:10]})")
+        parts.append("")
+
+    # Document data
     if data["heirs"]:
-        parts.append("== HEIRS (Eredi) ==")
+        parts.append("== HEIRS (Eredi) \u2014 from documents ==")
         for i, h in enumerate(data["heirs"], 1):
-            line = f"{i}. {h.get('name', 'Unknown')}"
+            line = f"  {i}. {h.get('name', 'Unknown')}"
             if h.get("date_of_birth"):
                 line += f", born {h['date_of_birth']}"
             if h.get("marital_status"):
@@ -291,9 +467,9 @@ def build_context(data):
         parts.append("")
 
     if data["assets"]:
-        parts.append("== ASSETS (Immobili / Beni) ==")
+        parts.append("== ASSETS (Immobili / Beni) \u2014 from documents ==")
         for i, a in enumerate(data["assets"], 1):
-            parts.append(f"{i}. {a['description']}")
+            parts.append(f"  {i}. {a['description']}")
         parts.append("")
 
     parts.append("== RAW DOCUMENT TEXT ==")
@@ -301,11 +477,7 @@ def build_context(data):
         parts.append(f"\n--- Document: {doc['path']} (from folder: {doc['folder']}) ---")
         parts.append(doc["text"])
 
-    if st.session_state.notes:
-        parts.append("\n== CORRECTIONS & NOTES (from users — these override document data) ==")
-        for i, n in enumerate(st.session_state.notes):
-            parts.append(f"{i}. {n['note']} (added {n['added_at'][:10]})")
-
+    # Current report sections
     if st.session_state.reports:
         parts.append("\n== CURRENT REPORT SECTIONS ==")
         for s in st.session_state.reports:
@@ -423,6 +595,68 @@ with col_report:
 
 # --- Chat Column ---
 with col_chat:
+
+    # --- Interview Section ---
+    st.header("Interview")
+
+    if st.session_state.interview:
+        with st.expander(
+            f"View / Edit Interview Data ({len(st.session_state.interview)} entries)",
+            expanded=False,
+        ):
+            # Group by topic
+            topics = {}
+            for i, entry in enumerate(st.session_state.interview):
+                topics.setdefault(entry["topic"], []).append((i, entry))
+
+            with st.form("interview_edit"):
+                edited_answers = {}
+                for topic, entries in topics.items():
+                    label = TOPIC_LABELS.get(topic, topic.title())
+                    st.markdown(f"**{label}**")
+                    for i, entry in entries:
+                        st.caption(entry["question"])
+                        edited_answers[i] = st.text_area(
+                            f"answer_{i}",
+                            value=entry["answer"],
+                            key=f"iv_{i}",
+                            label_visibility="collapsed",
+                            height=68,
+                        )
+                    st.markdown("---")
+
+                if st.form_submit_button("Save Changes"):
+                    changed = False
+                    for i, new_answer in edited_answers.items():
+                        if new_answer != st.session_state.interview[i]["answer"]:
+                            st.session_state.interview[i]["answer"] = new_answer
+                            st.session_state.interview[i]["answered_at"] = datetime.now().isoformat()
+                            changed = True
+                    if changed:
+                        save_interview()
+                        st.rerun()
+    else:
+        st.caption("No interview data yet. Start an interview to build the knowledge base.")
+
+    interview_label = "Continue Interview" if st.session_state.interview else "Start Interview"
+    if st.button(interview_label, use_container_width=True, type="primary"):
+        if not st.session_state.interview:
+            trigger = (
+                "Please start the interview. Ask me ONE question at a time to gather "
+                "information about the inheritance situation. Start with the basics."
+            )
+        else:
+            trigger = (
+                "Please continue the interview. Review what has already been covered "
+                "and ask the next most useful question. Ask ONE question at a time."
+            )
+        with st.spinner("Thinking..."):
+            send_to_ai(trigger)
+        st.rerun()
+
+    st.divider()
+
+    # --- Chat Section ---
     st.header("Chat")
 
     if st.session_state.data is None:
@@ -436,7 +670,7 @@ with col_chat:
         if not api_key:
             st.error("AI chat not configured.")
         else:
-            st.caption("Ask questions or request reports in English or Italian.")
+            st.caption("Ask questions, request reports, or correct information.")
 
             # Scrollable chat history
             chat_container = st.container(height=500)
@@ -447,68 +681,8 @@ with col_chat:
 
             # Chat input
             if prompt := st.chat_input("Ask about the inheritance..."):
-                st.session_state.messages.append({"role": "user", "content": prompt})
-
-                context = build_context(st.session_state.data)
-                api_messages = [
-                    {"role": m["role"], "content": m["content"]}
-                    for m in st.session_state.messages
-                ]
-
-                client = anthropic.Anthropic(api_key=api_key)
-
                 with st.spinner("Thinking..."):
-                    response = client.messages.create(
-                        model="claude-sonnet-4-20250514",
-                        max_tokens=4096,
-                        system=context,
-                        messages=api_messages,
-                        tools=AI_TOOLS,
-                    )
-
-                    # Tool use loop
-                    while response.stop_reason == "tool_use":
-                        assistant_content = []
-                        tool_results = []
-                        for block in response.content:
-                            if block.type == "text":
-                                assistant_content.append(
-                                    {"type": "text", "text": block.text}
-                                )
-                            elif block.type == "tool_use":
-                                assistant_content.append({
-                                    "type": "tool_use",
-                                    "id": block.id,
-                                    "name": block.name,
-                                    "input": block.input,
-                                })
-                                result = handle_tool_call(block.name, block.input)
-                                tool_results.append({
-                                    "type": "tool_result",
-                                    "tool_use_id": block.id,
-                                    "content": result,
-                                })
-
-                        api_messages.append({"role": "assistant", "content": assistant_content})
-                        api_messages.append({"role": "user", "content": tool_results})
-
-                        response = client.messages.create(
-                            model="claude-sonnet-4-20250514",
-                            max_tokens=4096,
-                            system=context,
-                            messages=api_messages,
-                            tools=AI_TOOLS,
-                        )
-
-                    # Extract final text reply
-                    reply = ""
-                    for block in response.content:
-                        if block.type == "text":
-                            reply += block.text
-                    reply = reply or "Done \u2014 check the Report panel."
-
-                st.session_state.messages.append({"role": "assistant", "content": reply})
-                save_chat_history()
+                    send_to_ai(prompt)
                 st.rerun()
 
             # Disclaimer
