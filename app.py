@@ -517,13 +517,6 @@ with st.sidebar:
 # --- Custom CSS for layout ---
 st.markdown("""
 <style>
-/* Make columns stick independently with separate scrolling */
-[data-testid="column"] {
-    overflow-y: auto;
-    max-height: calc(100vh - 100px);
-    padding-right: 1rem;
-}
-
 /* Blue highlighted expandable report items */
 div[data-testid="stExpander"] details {
     border: 1px solid #1976D2;
@@ -560,125 +553,127 @@ col_report, col_chat = st.columns([2, 1])
 # --- Report Column (scrollable independently) ---
 with col_report:
     st.header("Report")
+    report_scroll = st.container(height=700)
 
-    if st.session_state.data is None:
-        st.info("Connecting to Dropbox... If this persists, check your Dropbox configuration.")
-    else:
-        data = st.session_state.data
+    with report_scroll:
+        if st.session_state.data is None:
+            st.info("Connecting to Dropbox... If this persists, check your Dropbox configuration.")
+        else:
+            data = st.session_state.data
 
-        # Heirs
-        with st.expander("Heirs (Eredi)", expanded=False):
-            if data["heirs"]:
-                heir_rows = []
-                for i, h in enumerate(data["heirs"], 1):
-                    heir_rows.append({
-                        "#": i,
-                        "Name": h.get("name", "Unknown"),
-                        "Date of Birth": h.get("date_of_birth", ""),
-                        "Marital Status": h.get("marital_status", ""),
-                        "Children": h.get("num_children", ""),
-                    })
-                st.table(heir_rows)
+            # Heirs
+            with st.expander("Heirs (Eredi)", expanded=False):
+                if data["heirs"]:
+                    heir_rows = []
+                    for i, h in enumerate(data["heirs"], 1):
+                        heir_rows.append({
+                            "#": i,
+                            "Name": h.get("name", "Unknown"),
+                            "Date of Birth": h.get("date_of_birth", ""),
+                            "Marital Status": h.get("marital_status", ""),
+                            "Children": h.get("num_children", ""),
+                        })
+                    st.table(heir_rows)
 
-                dobs = {}
-                for h in data["heirs"]:
-                    dob = h.get("date_of_birth", "")
-                    if dob:
-                        dobs.setdefault(dob, []).append(h["name"])
-                for dob, names in dobs.items():
-                    if len(names) > 1:
-                        st.info(f"\U0001f46f {', '.join(names)} share DOB {dob} (twins)")
-            else:
-                st.warning("No heirs found yet.")
-
-        # Succession Law
-        if data["heirs"]:
-            with st.expander("Italian Succession Law (Preliminary)", expanded=False):
-                n = len(data["heirs"])
-                if n == 1:
-                    legittima = "1/2"
-                    disponibile = "1/2"
-                    share_pct = 50.0
+                    dobs = {}
+                    for h in data["heirs"]:
+                        dob = h.get("date_of_birth", "")
+                        if dob:
+                            dobs.setdefault(dob, []).append(h["name"])
+                    for dob, names in dobs.items():
+                        if len(names) > 1:
+                            st.info(f"\U0001f46f {', '.join(names)} share DOB {dob} (twins)")
                 else:
-                    legittima = "2/3"
-                    disponibile = "1/3"
-                    share_pct = round((2 / 3) / n * 100, 1)
+                    st.warning("No heirs found yet.")
 
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Legittima (forced share)", legittima)
-                c2.metric("Quota disponibile", disponibile)
-                c3.metric("Per-heir minimum", f"{share_pct}%")
+            # Succession Law
+            if data["heirs"]:
+                with st.expander("Italian Succession Law (Preliminary)", expanded=False):
+                    n = len(data["heirs"])
+                    if n == 1:
+                        legittima = "1/2"
+                        disponibile = "1/2"
+                        share_pct = 50.0
+                    else:
+                        legittima = "2/3"
+                        disponibile = "1/3"
+                        share_pct = round((2 / 3) / n * 100, 1)
 
-                st.caption(
-                    "If a surviving spouse exists, shares differ. "
-                    "Actual shares depend on wills, donations, and full family tree."
-                )
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Legittima (forced share)", legittima)
+                    c2.metric("Quota disponibile", disponibile)
+                    c3.metric("Per-heir minimum", f"{share_pct}%")
 
-        # Assets
-        with st.expander("Assets (Immobili / Beni)", expanded=False):
-            if data["assets"]:
-                for i, a in enumerate(data["assets"], 1):
-                    st.write(f"{i}. {a['description']}")
-            else:
-                st.info("No assets documented yet.")
-
-        # Interview data
-        if st.session_state.interview:
-            with st.expander(
-                f"Interview Data ({len(st.session_state.interview)} entries)",
-                expanded=False,
-            ):
-                topics = {}
-                for i, entry in enumerate(st.session_state.interview):
-                    topics.setdefault(entry["topic"], []).append((i, entry))
-
-                with st.form("interview_edit"):
-                    edited_answers = {}
-                    for topic, entries in topics.items():
-                        label = TOPIC_LABELS.get(topic, topic.title())
-                        st.markdown(f"**{label}**")
-                        for i, entry in entries:
-                            st.caption(entry["question"])
-                            edited_answers[i] = st.text_area(
-                                f"answer_{i}",
-                                value=entry["answer"],
-                                key=f"iv_{i}",
-                                label_visibility="collapsed",
-                                height=68,
-                            )
-                        st.markdown("---")
-
-                    if st.form_submit_button("Save Changes"):
-                        changed = False
-                        for i, new_answer in edited_answers.items():
-                            if new_answer != st.session_state.interview[i]["answer"]:
-                                st.session_state.interview[i]["answer"] = new_answer
-                                st.session_state.interview[i]["answered_at"] = datetime.now().isoformat()
-                                changed = True
-                        if changed:
-                            save_interview()
-                            st.rerun()
-
-        # Notes
-        if st.session_state.notes:
-            with st.expander(
-                f"Notes & Corrections ({len(st.session_state.notes)} entries)",
-                expanded=False,
-            ):
-                for i, n in enumerate(st.session_state.notes):
-                    st.write(f"{i + 1}. {n['note']}")
-                    st.caption(f"Added {n['added_at'][:10]}")
-
-        # AI-generated report sections
-        if st.session_state.reports:
-            st.divider()
-            st.subheader("AI Reports")
-            for section in st.session_state.reports:
-                with st.expander(section["title"], expanded=False):
-                    st.markdown(section["content"])
                     st.caption(
-                        f"Updated: {datetime.fromisoformat(section['updated_at']).strftime('%Y-%m-%d %H:%M')}"
+                        "If a surviving spouse exists, shares differ. "
+                        "Actual shares depend on wills, donations, and full family tree."
                     )
+
+            # Assets
+            with st.expander("Assets (Immobili / Beni)", expanded=False):
+                if data["assets"]:
+                    for i, a in enumerate(data["assets"], 1):
+                        st.write(f"{i}. {a['description']}")
+                else:
+                    st.info("No assets documented yet.")
+
+            # Interview data
+            if st.session_state.interview:
+                with st.expander(
+                    f"Interview Data ({len(st.session_state.interview)} entries)",
+                    expanded=False,
+                ):
+                    topics = {}
+                    for i, entry in enumerate(st.session_state.interview):
+                        topics.setdefault(entry["topic"], []).append((i, entry))
+
+                    with st.form("interview_edit"):
+                        edited_answers = {}
+                        for topic, entries in topics.items():
+                            label = TOPIC_LABELS.get(topic, topic.title())
+                            st.markdown(f"**{label}**")
+                            for i, entry in entries:
+                                st.caption(entry["question"])
+                                edited_answers[i] = st.text_area(
+                                    f"answer_{i}",
+                                    value=entry["answer"],
+                                    key=f"iv_{i}",
+                                    label_visibility="collapsed",
+                                    height=68,
+                                )
+                            st.markdown("---")
+
+                        if st.form_submit_button("Save Changes"):
+                            changed = False
+                            for i, new_answer in edited_answers.items():
+                                if new_answer != st.session_state.interview[i]["answer"]:
+                                    st.session_state.interview[i]["answer"] = new_answer
+                                    st.session_state.interview[i]["answered_at"] = datetime.now().isoformat()
+                                    changed = True
+                            if changed:
+                                save_interview()
+                                st.rerun()
+
+            # Notes
+            if st.session_state.notes:
+                with st.expander(
+                    f"Notes & Corrections ({len(st.session_state.notes)} entries)",
+                    expanded=False,
+                ):
+                    for i, n in enumerate(st.session_state.notes):
+                        st.write(f"{i + 1}. {n['note']}")
+                        st.caption(f"Added {n['added_at'][:10]}")
+
+            # AI-generated report sections
+            if st.session_state.reports:
+                st.divider()
+                st.subheader("AI Reports")
+                for section in st.session_state.reports:
+                    with st.expander(section["title"], expanded=False):
+                        st.markdown(section["content"])
+                        st.caption(
+                            f"Updated: {datetime.fromisoformat(section['updated_at']).strftime('%Y-%m-%d %H:%M')}"
+                        )
 
 # --- Chat Column (scrollable independently) ---
 with col_chat:
@@ -718,7 +713,7 @@ with col_chat:
             st.markdown('</div>', unsafe_allow_html=True)
 
             # Scrollable chat history
-            chat_container = st.container(height=500)
+            chat_container = st.container(height=550)
             with chat_container:
                 for msg in st.session_state.messages:
                     with st.chat_message(msg["role"]):
