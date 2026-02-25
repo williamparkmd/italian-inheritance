@@ -30,7 +30,52 @@ st.set_page_config(
     page_title="Inheritance",
     page_icon="\U0001f3db\ufe0f",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
+
+# --- CSS: Restyle sidebar as floating chat panel ---
+st.markdown("""
+<style>
+/* Float the sidebar as a chat panel at bottom-right */
+section[data-testid="stSidebar"] {
+    position: fixed !important;
+    right: 1.5rem !important;
+    bottom: 1.5rem !important;
+    left: auto !important;
+    top: auto !important;
+    width: 420px !important;
+    min-width: 420px !important;
+    max-width: 420px !important;
+    max-height: 75vh !important;
+    border-radius: 16px !important;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.18) !important;
+    border: 1px solid rgba(128,128,128,0.2) !important;
+    z-index: 999 !important;
+    overflow: hidden !important;
+}
+section[data-testid="stSidebar"] > div:first-child {
+    max-height: 75vh;
+    overflow-y: auto;
+    padding-top: 0.75rem;
+    padding-bottom: 0.5rem;
+}
+
+/* Hide sidebar collapse/expand controls */
+button[data-testid="stSidebarCollapsedControl"],
+[data-testid="stSidebarCollapsedControl"],
+button[kind="headerNoPadding"] {
+    display: none !important;
+}
+
+/* Main content takes full width */
+section.stMain .stMainBlockContainer {
+    max-width: 100% !important;
+}
+section.stMain {
+    margin-left: 0 !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
 # --- State Init ---
 for key, default in [
@@ -453,7 +498,7 @@ def build_context(data):
         parts.append("")
 
     # Document data
-    if data["heirs"]:
+    if data and data["heirs"]:
         parts.append("== HEIRS (Eredi) \u2014 from documents ==")
         for i, h in enumerate(data["heirs"], 1):
             line = f"  {i}. {h.get('name', 'Unknown')}"
@@ -466,16 +511,17 @@ def build_context(data):
             parts.append(line)
         parts.append("")
 
-    if data["assets"]:
+    if data and data["assets"]:
         parts.append("== ASSETS (Immobili / Beni) \u2014 from documents ==")
         for i, a in enumerate(data["assets"], 1):
             parts.append(f"  {i}. {a['description']}")
         parts.append("")
 
-    parts.append("== RAW DOCUMENT TEXT ==")
-    for doc in data["documents"]:
-        parts.append(f"\n--- Document: {doc['path']} (from folder: {doc['folder']}) ---")
-        parts.append(doc["text"])
+    if data and data["documents"]:
+        parts.append("== RAW DOCUMENT TEXT ==")
+        for doc in data["documents"]:
+            parts.append(f"\n--- Document: {doc['path']} (from folder: {doc['folder']}) ---")
+            parts.append(doc["text"])
 
     # Current report sections
     if st.session_state.reports:
@@ -487,124 +533,151 @@ def build_context(data):
     return "\n".join(parts)
 
 
-# --- Sidebar ---
+# =====================================================================
+# SIDEBAR = Floating Chat Panel
+# =====================================================================
 with st.sidebar:
-    st.image("assets/crest.png", use_container_width=True)
-    st.title("Inheritance")
-    st.caption("Divisione Eredit\u00e0")
+    # Header row: title + interview icon
+    h1, h2 = st.columns([5, 1])
+    with h1:
+        st.markdown("#### Chat")
+    with h2:
+        interview_clicked = st.button(
+            "\U0001f399\ufe0f",
+            help="Start or continue the interview",
+            key="interview_btn",
+        )
 
-    if st.session_state.data:
-        n_docs = len(st.session_state.data["documents"])
-        scan_time = datetime.fromisoformat(st.session_state.data["scan_date"]).strftime("%H:%M")
-        st.caption(f"\u2713 {n_docs} document(s) \u00b7 last sync {scan_time}")
-    else:
-        st.warning("Dropbox not configured or no documents found.")
+    # Handle interview button
+    if interview_clicked:
+        if not st.session_state.interview:
+            trigger = (
+                "Please start the interview. Ask me ONE question at a time to gather "
+                "information about the inheritance situation. Start with the basics."
+            )
+        else:
+            trigger = (
+                "Please continue the interview. Review what has already been covered "
+                "and ask the next most useful question. Ask ONE question at a time."
+            )
+        with st.spinner("Thinking..."):
+            send_to_ai(trigger)
+        st.rerun()
 
-    if st.session_state.data:
-        st.divider()
-        st.subheader("Documents")
-        for doc in st.session_state.data["documents"]:
-            st.text(f"\U0001f4c4 {doc['filename']}")
+    # Scrollable chat messages
+    chat_container = st.container(height=400)
+    with chat_container:
+        if not st.session_state.messages:
+            st.caption("Ask a question or click \U0001f399\ufe0f to start an interview.")
+        for msg in st.session_state.messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
 
-    if st.session_state.messages:
-        st.divider()
-        if st.button("Clear Chat History", use_container_width=True):
+    # Chat input
+    if prompt := st.chat_input("Ask about the inheritance..."):
+        with st.spinner("Thinking..."):
+            send_to_ai(prompt)
+        st.rerun()
+
+    # Bottom controls
+    b1, b2 = st.columns(2)
+    with b1:
+        if st.session_state.messages and st.button("Clear Chat", use_container_width=True):
             st.session_state.messages = []
             save_chat_history()
             st.rerun()
+    with b2:
+        st.caption("\u26a0\ufe0f Not legal advice")
 
 
-# --- Main Layout: Side by Side ---
-col_report, col_chat = st.columns([1, 1])
+# =====================================================================
+# MAIN PAGE = Full-width Report
+# =====================================================================
 
-# --- Report Column ---
-with col_report:
-    st.header("Report")
-
-    if st.session_state.data is None:
-        st.info("Connecting to Dropbox... If this persists, check your Dropbox configuration.")
+# Header
+hcol1, hcol2 = st.columns([1, 8])
+with hcol1:
+    st.image("assets/crest.png", width=80)
+with hcol2:
+    st.title("Inheritance")
+    if st.session_state.data:
+        n_docs = len(st.session_state.data["documents"])
+        scan_time = datetime.fromisoformat(st.session_state.data["scan_date"]).strftime("%H:%M")
+        st.caption(f"Divisione Eredit\u00e0 \u00b7 {n_docs} document(s) \u00b7 last sync {scan_time}")
     else:
-        data = st.session_state.data
+        st.caption("Divisione Eredit\u00e0")
 
-        # Heirs
-        st.subheader("Heirs (Eredi)")
-        if data["heirs"]:
-            heir_rows = []
-            for i, h in enumerate(data["heirs"], 1):
-                heir_rows.append({
-                    "#": i,
-                    "Name": h.get("name", "Unknown"),
-                    "Date of Birth": h.get("date_of_birth", ""),
-                    "Marital Status": h.get("marital_status", ""),
-                    "Children": h.get("num_children", ""),
-                })
-            st.table(heir_rows)
+st.divider()
 
-            dobs = {}
-            for h in data["heirs"]:
-                dob = h.get("date_of_birth", "")
-                if dob:
-                    dobs.setdefault(dob, []).append(h["name"])
-            for dob, names in dobs.items():
-                if len(names) > 1:
-                    st.info(f"\U0001f46f {', '.join(names)} share DOB {dob} (twins)")
+if st.session_state.data is None:
+    st.info("Connecting to Dropbox... If this persists, check your Dropbox configuration.")
+else:
+    data = st.session_state.data
+
+    # --- Heirs ---
+    st.subheader("Heirs (Eredi)")
+    if data["heirs"]:
+        heir_rows = []
+        for i, h in enumerate(data["heirs"], 1):
+            heir_rows.append({
+                "#": i,
+                "Name": h.get("name", "Unknown"),
+                "Date of Birth": h.get("date_of_birth", ""),
+                "Marital Status": h.get("marital_status", ""),
+                "Children": h.get("num_children", ""),
+            })
+        st.table(heir_rows)
+
+        dobs = {}
+        for h in data["heirs"]:
+            dob = h.get("date_of_birth", "")
+            if dob:
+                dobs.setdefault(dob, []).append(h["name"])
+        for dob, names in dobs.items():
+            if len(names) > 1:
+                st.info(f"\U0001f46f {', '.join(names)} share DOB {dob} (twins)")
+    else:
+        st.warning("No heirs found yet.")
+
+    # --- Succession Law ---
+    if data["heirs"]:
+        st.subheader("Italian Succession Law (Preliminary)")
+        n = len(data["heirs"])
+        if n == 1:
+            legittima = "1/2"
+            disponibile = "1/2"
+            share_pct = 50.0
         else:
-            st.warning("No heirs found yet.")
+            legittima = "2/3"
+            disponibile = "1/3"
+            share_pct = round((2 / 3) / n * 100, 1)
 
-        # Succession Law
-        if data["heirs"]:
-            st.subheader("Italian Succession Law (Preliminary)")
-            n = len(data["heirs"])
-            if n == 1:
-                legittima = "1/2"
-                disponibile = "1/2"
-                share_pct = 50.0
-            else:
-                legittima = "2/3"
-                disponibile = "1/3"
-                share_pct = round((2 / 3) / n * 100, 1)
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Legittima (forced share)", legittima)
+        c2.metric("Quota disponibile", disponibile)
+        c3.metric("Per-heir minimum", f"{share_pct}%")
 
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Legittima (forced share)", legittima)
-            c2.metric("Quota disponibile", disponibile)
-            c3.metric("Per-heir minimum", f"{share_pct}%")
+        st.caption(
+            "If a surviving spouse exists, shares differ. "
+            "Actual shares depend on wills, donations, and full family tree."
+        )
 
-            st.caption(
-                "If a surviving spouse exists, shares differ. "
-                "Actual shares depend on wills, donations, and full family tree."
-            )
+    # --- Assets ---
+    st.subheader("Assets (Immobili / Beni)")
+    if data["assets"]:
+        for i, a in enumerate(data["assets"], 1):
+            st.write(f"{i}. {a['description']}")
+    else:
+        st.info("No assets documented yet.")
 
-        # Assets
-        st.subheader("Assets (Immobili / Beni)")
-        if data["assets"]:
-            for i, a in enumerate(data["assets"], 1):
-                st.write(f"{i}. {a['description']}")
-        else:
-            st.info("No assets documented yet.")
-
-        # AI-generated report sections
-        if st.session_state.reports:
-            st.divider()
-            st.subheader("AI Reports")
-            for section in st.session_state.reports:
-                st.markdown(f"### {section['title']}")
-                st.markdown(section["content"])
-                st.caption(
-                    f"Updated: {datetime.fromisoformat(section['updated_at']).strftime('%Y-%m-%d %H:%M')}"
-                )
-
-# --- Chat Column ---
-with col_chat:
-
-    # --- Interview Section ---
-    st.header("Interview")
-
+    # --- Interview Data (editable) ---
     if st.session_state.interview:
+        st.divider()
+        st.subheader("Interview Data")
         with st.expander(
-            f"View / Edit Interview Data ({len(st.session_state.interview)} entries)",
+            f"View / Edit ({len(st.session_state.interview)} entries)",
             expanded=False,
         ):
-            # Group by topic
             topics = {}
             for i, entry in enumerate(st.session_state.interview):
                 topics.setdefault(entry["topic"], []).append((i, entry))
@@ -635,59 +708,20 @@ with col_chat:
                     if changed:
                         save_interview()
                         st.rerun()
-    else:
-        st.caption("No interview data yet. Start an interview to build the knowledge base.")
 
-    interview_label = "Continue Interview" if st.session_state.interview else "Start Interview"
-    if st.button(interview_label, use_container_width=True, type="primary"):
-        if not st.session_state.interview:
-            trigger = (
-                "Please start the interview. Ask me ONE question at a time to gather "
-                "information about the inheritance situation. Start with the basics."
-            )
-        else:
-            trigger = (
-                "Please continue the interview. Review what has already been covered "
-                "and ask the next most useful question. Ask ONE question at a time."
-            )
-        with st.spinner("Thinking..."):
-            send_to_ai(trigger)
-        st.rerun()
-
-    st.divider()
-
-    # --- Chat Section ---
-    st.header("Chat")
-
-    if st.session_state.data is None:
-        st.info("Waiting for documents to load from Dropbox...")
-    else:
-        try:
-            api_key = st.secrets.get("ANTHROPIC_API_KEY", "") or os.environ.get("ANTHROPIC_API_KEY", "")
-        except Exception:
-            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-
-        if not api_key:
-            st.error("AI chat not configured.")
-        else:
-            st.caption("Ask questions, request reports, or correct information.")
-
-            # Scrollable chat history
-            chat_container = st.container(height=500)
-            with chat_container:
-                for msg in st.session_state.messages:
-                    with st.chat_message(msg["role"]):
-                        st.markdown(msg["content"])
-
-            # Chat input
-            if prompt := st.chat_input("Ask about the inheritance..."):
-                with st.spinner("Thinking..."):
-                    send_to_ai(prompt)
-                st.rerun()
-
-            # Disclaimer
-            st.divider()
+    # --- AI-generated Report Sections ---
+    if st.session_state.reports:
+        st.divider()
+        st.subheader("AI Reports")
+        for section in st.session_state.reports:
+            st.markdown(f"### {section['title']}")
+            st.markdown(section["content"])
             st.caption(
-                "\u26a0\ufe0f This is informational only \u2014 not legal advice. "
-                "Consult a qualified Italian lawyer for legal decisions."
+                f"Updated: {datetime.fromisoformat(section['updated_at']).strftime('%Y-%m-%d %H:%M')}"
             )
+
+    # --- Documents list ---
+    st.divider()
+    st.subheader("Source Documents")
+    for doc in data["documents"]:
+        st.text(f"\U0001f4c4 {doc['filename']}")
