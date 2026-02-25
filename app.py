@@ -1,31 +1,27 @@
 #!/usr/bin/env python3
 """
 Italian Inheritance — Document Reports & AI Chat
-Streamlit app that reads documents from uploaded files or a local Dropbox folder,
-shows structured reports, and lets family members ask questions via AI.
+Reads documents from shared Dropbox folder, shows structured reports,
+and lets family members ask questions via AI.
 """
 
-import io
-import json
 import os
-import tempfile
 from datetime import datetime
 from pathlib import Path
 
 import anthropic
 import streamlit as st
+from dotenv import load_dotenv
+
+load_dotenv(".env.local")
 
 from scan import (
-    scan_folder,
+    get_dropbox_client,
+    scan_dropbox,
+    upload_to_dropbox,
     parse_heirs,
     parse_assets,
-    DROPBOX_FOLDER,
     HANDLERS,
-    read_txt,
-    read_pdf,
-    read_docx,
-    read_xlsx,
-    read_csv,
 )
 
 # --- Config ---
@@ -41,54 +37,14 @@ if "messages" not in st.session_state:
 if "data" not in st.session_state:
     st.session_state.data = None
 
-# Detect if running locally (Dropbox folder exists) or deployed
-LOCAL_MODE = Path(DROPBOX_FOLDER).exists()
 
-
-def extract_text_from_upload(uploaded_file):
-    """Extract text from a Streamlit uploaded file."""
-    ext = Path(uploaded_file.name).suffix.lower()
-    if ext not in HANDLERS:
+def load_documents():
+    """Scan Dropbox via API and parse data."""
+    dbx = get_dropbox_client()
+    if not dbx:
+        st.error("Dropbox not configured.")
         return None
-
-    # Write to temp file so handlers can read it
-    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
-        tmp.write(uploaded_file.getbuffer())
-        tmp_path = tmp.name
-
-    try:
-        handler = HANDLERS[ext]
-        return handler(tmp_path)
-    finally:
-        os.unlink(tmp_path)
-
-
-def process_uploads(uploaded_files):
-    """Process uploaded files into document list."""
-    documents = []
-    for f in uploaded_files:
-        text = extract_text_from_upload(f)
-        if text and text.strip():
-            documents.append({
-                "path": f.name,
-                "folder": "uploaded",
-                "filename": f.name,
-                "type": Path(f.name).suffix.lower(),
-                "text": text.strip(),
-                "scanned_at": datetime.now().isoformat(),
-                "size_bytes": f.size,
-            })
-    return documents
-
-
-def load_from_dropbox():
-    """Scan local Dropbox folder."""
-    folder = os.environ.get("DROPBOX_FOLDER", DROPBOX_FOLDER)
-    return scan_folder(folder)
-
-
-def build_data(documents):
-    """Build structured data from documents."""
+    documents = scan_dropbox(dbx)
     return {
         "scan_date": datetime.now().isoformat(),
         "documents": documents,
@@ -139,28 +95,34 @@ with st.sidebar:
     st.title("Italian Inheritance")
     st.caption("Divisione Eredità")
 
-    if LOCAL_MODE:
-        # Local mode: scan Dropbox folder
-        st.success("Connected to Dropbox folder", icon="📂")
-        if st.button("🔄 Scan Documents", use_container_width=True):
-            with st.spinner("Scanning Dropbox folder..."):
-                documents = load_from_dropbox()
-                st.session_state.data = build_data(documents)
-            st.success(f"Found {len(documents)} document(s)")
-    else:
-        # Deployed mode: file upload
-        st.info("Upload documents to get started", icon="📤")
-        uploaded = st.file_uploader(
-            "Upload documents",
-            type=["txt", "pdf", "docx", "doc", "xlsx", "xls", "csv", "png", "jpg", "jpeg"],
-            accept_multiple_files=True,
-        )
-        if uploaded and st.button("📊 Process Documents", use_container_width=True):
-            with st.spinner("Processing uploads..."):
-                documents = process_uploads(uploaded)
-                st.session_state.data = build_data(documents)
-            st.success(f"Processed {len(documents)} document(s)")
+    # Scan documents from Dropbox
+    if st.button("🔄 Load Documents", use_container_width=True):
+        with st.spinner("Reading from Dropbox..."):
+            st.session_state.data = load_documents()
+        if st.session_state.data:
+            st.success(f"Found {len(st.session_state.data['documents'])} document(s)")
 
+    # Upload new documents to Dropbox
+    st.divider()
+    uploaded = st.file_uploader(
+        "Upload to Dropbox",
+        type=["txt", "pdf", "docx", "doc", "xlsx", "xls", "csv", "png", "jpg", "jpeg"],
+        accept_multiple_files=True,
+    )
+    if uploaded and st.button("📤 Upload & Scan", use_container_width=True):
+        dbx = get_dropbox_client()
+        if dbx:
+            with st.spinner("Uploading to Dropbox..."):
+                for f in uploaded:
+                    upload_to_dropbox(dbx, f.getvalue(), f.name)
+                    st.write(f"✓ {f.name}")
+            with st.spinner("Scanning all documents..."):
+                st.session_state.data = load_documents()
+            st.success("Uploaded and scanned!")
+        else:
+            st.error("Dropbox not configured.")
+
+    # Stats
     if st.session_state.data:
         st.divider()
         st.subheader("Documents")
@@ -183,10 +145,7 @@ tab_report, tab_chat = st.tabs(["📊 Report", "💬 Chat"])
 # --- Report Tab ---
 with tab_report:
     if st.session_state.data is None:
-        if LOCAL_MODE:
-            st.info("Click **Scan Documents** in the sidebar to load documents from Dropbox.")
-        else:
-            st.info("Upload documents in the sidebar to generate a report.")
+        st.info("Click **Load Documents** in the sidebar to read documents from Dropbox.")
     else:
         data = st.session_state.data
         st.header("Inheritance Report")
@@ -247,19 +206,16 @@ with tab_report:
             for i, a in enumerate(data["assets"], 1):
                 st.write(f"{i}. {a['description']}")
         else:
-            st.info("No assets documented yet. Add property documents to the Dropbox folder.")
+            st.info("No assets documented yet. Upload property documents to get started.")
 
 # --- Chat Tab ---
 with tab_chat:
     if st.session_state.data is None:
-        if LOCAL_MODE:
-            st.info("Click **Scan Documents** first, then ask questions here.")
-        else:
-            st.info("Upload documents first, then ask questions here.")
+        st.info("Click **Load Documents** first, then ask questions here.")
     else:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         if not api_key:
-            st.error("ANTHROPIC_API_KEY not configured. Chat is unavailable.")
+            st.error("AI chat not configured.")
         else:
             st.caption("Ask questions about the inheritance documents in English or Italian.")
 

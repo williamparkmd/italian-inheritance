@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 """
 Italian Inheritance Document Scanner
-Scans a Dropbox folder (recursively), extracts text from all documents,
+Reads documents from Dropbox API (App folder), extracts text,
 parses structured data (heirs, assets, valuations), and generates reports.
 """
 
+import io
 import json
 import os
-import sys
+import re
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
-# File type handlers
+import dropbox
+
+# File type handlers — all take a file path and return text
 def read_txt(path):
     encodings = ['utf-8', 'latin-1', 'cp1252']
     for enc in encodings:
@@ -32,7 +36,6 @@ def read_pdf(path):
                     text.append(t)
         return '\n\n'.join(text) if text else None
     except Exception as e:
-        print(f"  Warning: Could not read PDF {path}: {e}")
         return None
 
 def read_docx(path):
@@ -41,7 +44,6 @@ def read_docx(path):
         doc = Document(path)
         return '\n'.join(p.text for p in doc.paragraphs if p.text.strip())
     except Exception as e:
-        print(f"  Warning: Could not read DOCX {path}: {e}")
         return None
 
 def read_xlsx(path):
@@ -58,17 +60,15 @@ def read_xlsx(path):
                     text.append('\t'.join(cells))
         return '\n'.join(text) if text else None
     except Exception as e:
-        print(f"  Warning: Could not read XLSX {path}: {e}")
         return None
 
 def read_csv(path):
     try:
         return Path(path).read_text(encoding='utf-8')
-    except:
+    except Exception:
         try:
             return Path(path).read_text(encoding='latin-1')
-        except Exception as e:
-            print(f"  Warning: Could not read CSV {path}: {e}")
+        except Exception:
             return None
 
 def read_image(path):
@@ -78,8 +78,7 @@ def read_image(path):
         img = Image.open(path)
         text = pytesseract.image_to_string(img, lang='ita+eng')
         return text if text.strip() else None
-    except Exception as e:
-        print(f"  Warning: Could not OCR image {path}: {e}")
+    except Exception:
         return None
 
 HANDLERS = {
@@ -98,51 +97,72 @@ HANDLERS = {
     '.bmp': read_image,
 }
 
-DROPBOX_FOLDER = "/Users/williampark/Library/CloudStorage/Dropbox/ WILLIAM/Italian Inheritance/Italian Inheritance Documents"
-DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "extracted_data.json")
+
+def get_dropbox_client():
+    """Create Dropbox client from token."""
+    token = os.environ.get("DROPBOX_TOKEN", "")
+    if not token:
+        return None
+    return dropbox.Dropbox(token)
 
 
-def scan_folder(folder):
-    """Recursively scan folder and extract text from all supported documents."""
+def scan_dropbox(dbx, folder_path=""):
+    """Recursively scan Dropbox folder and extract text from all supported documents."""
     documents = []
-    folder = Path(folder)
 
-    if not folder.exists():
-        print(f"Error: Folder not found: {folder}")
-        sys.exit(1)
-
-    all_files = sorted(folder.rglob('*'))
-    supported = [f for f in all_files if f.is_file() and f.suffix.lower() in HANDLERS and not f.name.startswith('.')]
-
-    if not supported:
-        print(f"No supported documents found in {folder}")
+    try:
+        result = dbx.files_list_folder(folder_path, recursive=True)
+    except Exception as e:
+        print(f"Error listing Dropbox folder: {e}")
         return documents
 
-    print(f"Found {len(supported)} document(s):\n")
+    entries = list(result.entries)
+    while result.has_more:
+        result = dbx.files_list_folder_continue(result.cursor)
+        entries.extend(result.entries)
 
-    for filepath in supported:
-        rel_path = filepath.relative_to(folder)
-        ext = filepath.suffix.lower()
+    files = [e for e in entries if isinstance(e, dropbox.files.FileMetadata)]
+    supported = [f for f in files if Path(f.name).suffix.lower() in HANDLERS]
+
+    if not supported:
+        return documents
+
+    for entry in supported:
+        ext = Path(entry.name).suffix.lower()
         handler = HANDLERS.get(ext)
+        rel_path = entry.path_display.lstrip('/')
+        folder = str(Path(rel_path).parent) if str(Path(rel_path).parent) != '.' else 'root'
 
-        print(f"  Reading: {rel_path}")
-        text = handler(str(filepath))
+        # Download to temp file
+        try:
+            _, response = dbx.files_download(entry.path_lower)
+            with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+                tmp.write(response.content)
+                tmp_path = tmp.name
 
-        if text and text.strip():
-            documents.append({
-                'path': str(rel_path),
-                'folder': str(rel_path.parent) if str(rel_path.parent) != '.' else 'root',
-                'filename': filepath.name,
-                'type': ext,
-                'text': text.strip(),
-                'scanned_at': datetime.now().isoformat(),
-                'size_bytes': filepath.stat().st_size,
-            })
-            print(f"    ✓ Extracted {len(text)} chars")
-        else:
-            print(f"    ✗ No text extracted")
+            text = handler(tmp_path)
+            os.unlink(tmp_path)
+
+            if text and text.strip():
+                documents.append({
+                    'path': rel_path,
+                    'folder': folder,
+                    'filename': entry.name,
+                    'type': ext,
+                    'text': text.strip(),
+                    'scanned_at': datetime.now().isoformat(),
+                    'size_bytes': entry.size,
+                })
+        except Exception as e:
+            print(f"  Error processing {entry.name}: {e}")
 
     return documents
+
+
+def upload_to_dropbox(dbx, file_bytes, filename, folder_path=""):
+    """Upload a file to Dropbox App folder."""
+    path = f"{folder_path}/{filename}" if folder_path else f"/{filename}"
+    dbx.files_upload(file_bytes, path, mode=dropbox.files.WriteMode.overwrite)
 
 
 def parse_heirs(documents):
@@ -158,7 +178,6 @@ def parse_heirs(documents):
                 in_heirs = True
                 continue
             if in_heirs and line and line[0].isdigit():
-                # Parse lines like: 1. Giovanni (18/02/1960), coniugato, 1 figlio;
                 heir = parse_heir_line(line)
                 if heir:
                     heir['source_file'] = doc['path']
@@ -171,25 +190,20 @@ def parse_heirs(documents):
 
 def parse_heir_line(line):
     """Parse a single heir line."""
-    import re
-    # Remove leading number and punctuation
     line = re.sub(r'^\d+[\.\)\s]+', '', line).strip()
     if not line:
         return None
 
     heir = {}
 
-    # Extract name (first word before parenthesis or comma)
     name_match = re.match(r'([A-Za-zÀ-ÿ]+)', line)
     if name_match:
         heir['name'] = name_match.group(1)
 
-    # Extract date of birth
     dob_match = re.search(r'\((\d{2}/\d{2}/\d{4})\)', line)
     if dob_match:
         heir['date_of_birth'] = dob_match.group(1)
 
-    # Extract marital status
     if 'coniugat' in line.lower():
         heir['marital_status'] = 'married'
         heir['marital_status_it'] = 'coniugato/a'
@@ -200,12 +214,10 @@ def parse_heir_line(line):
         heir['marital_status'] = 'widowed'
         heir['marital_status_it'] = 'vedovo/a'
 
-    # Extract number of children
-    children_match = re.search(r'(\d+)\s+figli[oa]?', line)
+    children_match = re.search(r'(\d+)\s+figli[oa]?e?', line)
     if children_match:
         heir['num_children'] = int(children_match.group(1))
 
-    # Detect if twins (same DOB as another — handled at report level)
     heir['raw_text'] = line.rstrip(';').strip()
 
     return heir if heir.get('name') else None
@@ -230,121 +242,3 @@ def parse_assets(documents):
                     'raw_text': line,
                 })
     return assets
-
-
-def generate_report(data):
-    """Generate a readable report from extracted data."""
-    print("\n" + "=" * 60)
-    print("  ITALIAN INHERITANCE — DOCUMENT REPORT")
-    print("=" * 60)
-    print(f"  Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    print(f"  Documents scanned: {len(data['documents'])}")
-    print("=" * 60)
-
-    # Heirs
-    print("\n── HEIRS (Eredi) ─────────────────────────────────────────")
-    if data['heirs']:
-        for i, h in enumerate(data['heirs'], 1):
-            print(f"\n  {i}. {h.get('name', 'Unknown')}")
-            if h.get('date_of_birth'):
-                print(f"     Born: {h['date_of_birth']}")
-            if h.get('marital_status'):
-                print(f"     Status: {h['marital_status']} ({h.get('marital_status_it', '')})")
-            if h.get('num_children') is not None:
-                children_label = 'child' if h['num_children'] == 1 else 'children'
-                print(f"     Children: {h['num_children']} {children_label}")
-        print(f"\n  Total heirs: {len(data['heirs'])}")
-        total_grandchildren = sum(h.get('num_children', 0) for h in data['heirs'])
-        print(f"  Total grandchildren: {total_grandchildren}")
-
-        # Detect twins (same DOB)
-        dobs = {}
-        for h in data['heirs']:
-            dob = h.get('date_of_birth', '')
-            if dob:
-                dobs.setdefault(dob, []).append(h['name'])
-        for dob, names in dobs.items():
-            if len(names) > 1:
-                print(f"  Note: {', '.join(names)} share DOB {dob} (twins)")
-    else:
-        print("  No heirs found yet.")
-
-    # Italian succession law summary
-    if data['heirs']:
-        n = len(data['heirs'])
-        print("\n── ITALIAN SUCCESSION LAW (Preliminary) ──────────────────")
-        print(f"\n  With {n} children as heirs:")
-        if n == 1:
-            print("  Legittima (forced share): 1/2 of estate")
-            print("  Quota disponibile (free share): 1/2 of estate")
-        else:
-            print(f"  Legittima (forced share): 2/3 of estate (split equally among {n} heirs)")
-            print(f"  Quota disponibile (free share): 1/3 of estate")
-            share_pct = round((2/3) / n * 100, 1)
-            print(f"  Each heir's minimum forced share: {share_pct}% of estate")
-        print("\n  Note: If a surviving spouse exists, shares differ.")
-        print("  Note: This is preliminary — actual shares depend on")
-        print("  wills, donations, and full family tree analysis.")
-
-    # Assets
-    print("\n── ASSETS (Immobili / Beni) ───────────────────────────────")
-    if data['assets']:
-        for i, a in enumerate(data['assets'], 1):
-            print(f"  {i}. {a['description']}")
-    else:
-        print("  No assets documented yet.")
-        print("  (Add property documents to the Dropbox folder)")
-
-    # Documents inventory
-    print("\n── DOCUMENTS ─────────────────────────────────────────────")
-    for doc in data['documents']:
-        print(f"  [{doc['type']}] {doc['path']} ({doc['size_bytes']} bytes)")
-        if doc['folder'] != 'root':
-            print(f"        Folder: {doc['folder']}")
-
-    print("\n" + "=" * 60)
-    print("  To update: add documents to Dropbox folder, then re-run:")
-    print(f"  python3 scan.py")
-    print("=" * 60 + "\n")
-
-
-def save_data(data):
-    """Save extracted data to JSON for Claude Code to reference."""
-    with open(DATA_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-    print(f"Data saved to {DATA_FILE}")
-
-
-def main():
-    folder = DROPBOX_FOLDER
-
-    # Allow override via command line
-    if len(sys.argv) > 1:
-        folder = sys.argv[1]
-
-    print(f"Scanning: {folder}\n")
-
-    documents = scan_folder(folder)
-
-    if not documents:
-        print("\nNo documents with extractable text found.")
-        print(f"Add documents to: {folder}")
-        return
-
-    heirs = parse_heirs(documents)
-    assets = parse_assets(documents)
-
-    data = {
-        'scan_date': datetime.now().isoformat(),
-        'source_folder': str(folder),
-        'documents': documents,
-        'heirs': heirs,
-        'assets': assets,
-    }
-
-    save_data(data)
-    generate_report(data)
-
-
-if __name__ == '__main__':
-    main()

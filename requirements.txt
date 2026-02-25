@@ -1,6 +1,8 @@
 streamlit
 anthropic
+dropbox
 pdfplumber
 python-docx
 openpyxl
 Pillow
+python-dotenv
