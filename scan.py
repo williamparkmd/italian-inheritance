@@ -98,16 +98,34 @@ HANDLERS = {
 }
 
 
-def get_dropbox_client():
-    """Create Dropbox client from token."""
+def _get_secret(key):
+    """Read a secret from Streamlit secrets or environment variables."""
     try:
         import streamlit as st
-        token = st.secrets.get("DROPBOX_TOKEN", "") or os.environ.get("DROPBOX_TOKEN", "")
+        return st.secrets.get(key, "") or os.environ.get(key, "")
     except Exception:
-        token = os.environ.get("DROPBOX_TOKEN", "")
-    if not token:
-        return None
-    return dropbox.Dropbox(token)
+        return os.environ.get(key, "")
+
+
+def get_dropbox_client():
+    """Create Dropbox client using refresh token (preferred) or legacy access token."""
+    refresh_token = _get_secret("DROPBOX_REFRESH_TOKEN")
+    app_key = _get_secret("DROPBOX_APP_KEY")
+    app_secret = _get_secret("DROPBOX_APP_SECRET")
+
+    if refresh_token and app_key and app_secret:
+        return dropbox.Dropbox(
+            oauth2_refresh_token=refresh_token,
+            app_key=app_key,
+            app_secret=app_secret,
+        )
+
+    # Fallback to legacy short-lived token
+    token = _get_secret("DROPBOX_TOKEN")
+    if token:
+        return dropbox.Dropbox(token)
+
+    return None
 
 
 def scan_dropbox(dbx, folder_path=""):
