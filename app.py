@@ -19,10 +19,8 @@ from scan import (
     get_dropbox_client,
     get_dropbox_fingerprint,
     scan_dropbox,
-    upload_to_dropbox,
     parse_heirs,
     parse_assets,
-    HANDLERS,
 )
 
 # --- Config ---
@@ -126,26 +124,6 @@ with st.sidebar:
         st.caption(f"✓ {n_docs} document(s) · last sync {scan_time}")
     else:
         st.warning("Dropbox not configured or no documents found.")
-
-    # Upload new documents to Dropbox
-    st.divider()
-    uploaded = st.file_uploader(
-        "Upload to Dropbox",
-        type=["txt", "pdf", "docx", "doc", "xlsx", "xls", "csv", "png", "jpg", "jpeg"],
-        accept_multiple_files=True,
-    )
-    if uploaded and st.button("📤 Upload & Scan", use_container_width=True):
-        dbx = get_dropbox_client()
-        if dbx:
-            with st.spinner("Uploading to Dropbox..."):
-                for f in uploaded:
-                    upload_to_dropbox(dbx, f.getvalue(), f.name)
-                    st.write(f"✓ {f.name}")
-            with st.spinner("Scanning all documents..."):
-                st.session_state.data = load_documents()
-            st.success("Uploaded and scanned!")
-        else:
-            st.error("Dropbox not configured.")
 
     # Stats
     if st.session_state.data:
