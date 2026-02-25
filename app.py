@@ -506,12 +506,6 @@ with st.sidebar:
         for doc in st.session_state.data["documents"]:
             st.text(f"\U0001f4c4 {doc['filename']}")
 
-    if st.session_state.messages:
-        st.divider()
-        if st.button("Clear Chat History", use_container_width=True):
-            st.session_state.messages = []
-            save_chat_history()
-            st.rerun()
 
 
 # --- Custom CSS for layout ---
