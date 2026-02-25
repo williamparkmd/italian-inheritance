@@ -207,6 +207,25 @@ def get_dropbox_fingerprint(dbx, folder_path=""):
         return None
 
 
+def save_app_data(dbx, filename, data):
+    """Save JSON data to Dropbox _app_data folder."""
+    content = json.dumps(data, indent=2).encode("utf-8")
+    dbx.files_upload(
+        content,
+        f"/_app_data/{filename}",
+        mode=dropbox.files.WriteMode.overwrite,
+    )
+
+
+def load_app_data(dbx, filename):
+    """Load JSON data from Dropbox _app_data folder."""
+    try:
+        _, response = dbx.files_download(f"/_app_data/{filename}")
+        return json.loads(response.content)
+    except Exception:
+        return None
+
+
 def parse_heirs(documents):
     """Parse heir information from document text."""
     heirs = []
