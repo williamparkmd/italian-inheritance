@@ -41,6 +41,8 @@ if "dropbox_fingerprint" not in st.session_state:
     st.session_state.dropbox_fingerprint = None
 if "reports" not in st.session_state:
     st.session_state.reports = []
+if "notes" not in st.session_state:
+    st.session_state.notes = []
 if "initialized" not in st.session_state:
     st.session_state.initialized = False
 
@@ -71,6 +73,9 @@ def load_persistent_data():
     report_data = load_app_data(dbx, "reports.json")
     if report_data:
         st.session_state.reports = report_data
+    notes_data = load_app_data(dbx, "notes.json")
+    if notes_data:
+        st.session_state.notes = notes_data
 
 
 def save_chat_history():
@@ -85,6 +90,13 @@ def save_reports():
     dbx = get_dropbox_client()
     if dbx:
         save_app_data(dbx, "reports.json", st.session_state.reports)
+
+
+def save_notes():
+    """Save notes/corrections to Dropbox."""
+    dbx = get_dropbox_client()
+    if dbx:
+        save_app_data(dbx, "notes.json", st.session_state.notes)
 
 
 # --- Auto-load on first open ---
@@ -110,8 +122,8 @@ def _poll_dropbox():
 _poll_dropbox()
 
 
-# --- Report Tools for AI ---
-REPORT_TOOLS = [
+# --- AI Tools ---
+AI_TOOLS = [
     {
         "name": "update_report",
         "description": (
@@ -153,6 +165,39 @@ REPORT_TOOLS = [
             "required": ["section_id"],
         },
     },
+    {
+        "name": "add_note",
+        "description": (
+            "Save a correction or important fact provided by the user. "
+            "Use this whenever the user corrects information (e.g. 'Giovanni actually has 2 children') "
+            "or provides new facts not in the documents. Notes persist across sessions and are always "
+            "considered when answering questions or generating reports."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "note": {
+                    "type": "string",
+                    "description": "The correction or fact to remember. Be specific and concise.",
+                },
+            },
+            "required": ["note"],
+        },
+    },
+    {
+        "name": "remove_note",
+        "description": "Remove a previously saved note that is no longer accurate or relevant.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "note_index": {
+                    "type": "integer",
+                    "description": "The 0-based index of the note to remove (from the CORRECTIONS & NOTES list).",
+                },
+            },
+            "required": ["note_index"],
+        },
+    },
 ]
 
 
@@ -190,6 +235,23 @@ def handle_tool_call(name, params):
             return f"Deleted report section '{section_id}'"
         return f"Section '{section_id}' not found"
 
+    if name == "add_note":
+        note_text = params["note"]
+        st.session_state.notes.append({
+            "note": note_text,
+            "added_at": datetime.now().isoformat(),
+        })
+        save_notes()
+        return f"Saved note: '{note_text}'"
+
+    if name == "remove_note":
+        idx = params["note_index"]
+        if 0 <= idx < len(st.session_state.notes):
+            removed = st.session_state.notes.pop(idx)
+            save_notes()
+            return f"Removed note: '{removed['note']}'"
+        return f"Invalid note index {idx}"
+
     return "Unknown tool"
 
 
@@ -206,6 +268,12 @@ def build_context(data):
         "or any structured output, use the update_report tool to display it on the Report panel.",
         "You can create multiple sections. To update an existing section, use update_report",
         "with the same section_id. To remove a section, use delete_report_section.",
+        "",
+        "IMPORTANT: When the user corrects any information or provides a new fact",
+        "(e.g. 'Giovanni actually has 2 children', 'the apartment is worth 200k'),",
+        "ALWAYS use the add_note tool to save it. Notes override document data and persist",
+        "across sessions. Always consider saved notes when answering questions or generating reports.",
+        "If a note contradicts document data, the note takes priority.",
         "",
     ]
 
@@ -232,6 +300,11 @@ def build_context(data):
     for doc in data["documents"]:
         parts.append(f"\n--- Document: {doc['path']} (from folder: {doc['folder']}) ---")
         parts.append(doc["text"])
+
+    if st.session_state.notes:
+        parts.append("\n== CORRECTIONS & NOTES (from users — these override document data) ==")
+        for i, n in enumerate(st.session_state.notes):
+            parts.append(f"{i}. {n['note']} (added {n['added_at'][:10]})")
 
     if st.session_state.reports:
         parts.append("\n== CURRENT REPORT SECTIONS ==")
@@ -390,7 +463,7 @@ with col_chat:
                         max_tokens=4096,
                         system=context,
                         messages=api_messages,
-                        tools=REPORT_TOOLS,
+                        tools=AI_TOOLS,
                     )
 
                     # Tool use loop
@@ -424,7 +497,7 @@ with col_chat:
                             max_tokens=4096,
                             system=context,
                             messages=api_messages,
-                            tools=REPORT_TOOLS,
+                            tools=AI_TOOLS,
                         )
 
                     # Extract final text reply
