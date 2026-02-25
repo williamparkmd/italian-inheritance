@@ -132,15 +132,6 @@ with st.sidebar:
         for doc in st.session_state.data["documents"]:
             st.text(f"📄 {doc['filename']}")
 
-        st.divider()
-        st.subheader("Quick Stats")
-        n_heirs = len(st.session_state.data["heirs"])
-        n_assets = len(st.session_state.data["assets"])
-        st.metric("Heirs", n_heirs)
-        st.metric("Assets", n_assets)
-        if n_heirs > 0:
-            total_gc = sum(h.get("num_children", 0) for h in st.session_state.data["heirs"])
-            st.metric("Grandchildren", total_gc)
 
 # --- Main ---
 tab_report, tab_chat = st.tabs(["📊 Report", "💬 Chat"])
