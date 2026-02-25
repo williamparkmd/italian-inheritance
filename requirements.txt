@@ -1,0 +1,6 @@
+streamlit
+anthropic
+pdfplumber
+python-docx
+openpyxl
+Pillow

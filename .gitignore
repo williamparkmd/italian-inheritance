@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.env
+.env.local
+extracted_data.json
+.DS_Store
+.next/
+node_modules/
